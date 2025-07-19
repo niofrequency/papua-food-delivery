@@ -23,16 +23,17 @@ export async function hashPassword(password: string) {
 
 async function comparePasswords(supplied: string, stored: string) {
   try {
-    // If stored password doesn't contain a dot, it's plain text (for testing)
+    // If stored password doesn't contain a dot, it's plain text
     if (!stored.includes('.')) {
       return supplied === stored;
     }
     
-    const [hashed, salt] = stored.split(".");
-    if (!hashed || !salt) {
+    const parts = stored.split(".");
+    if (parts.length !== 2) {
       return supplied === stored; // fallback to plain comparison
     }
     
+    const [hashed, salt] = parts;
     const hashedBuf = Buffer.from(hashed, "hex");
     const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
     return timingSafeEqual(hashedBuf, suppliedBuf);
@@ -57,8 +58,11 @@ export function setupAuth(app: Express) {
     }
   };
 
-  // Only use database session store if not in Vercel serverless
-  if (process.env.VERCEL !== "1" && storage.sessionStore) {
+  // For Vercel serverless, don't use database session store
+  if (process.env.VERCEL === "1") {
+    console.log("Using memory store for Vercel deployment");
+  } else if (storage.sessionStore) {
+    console.log("Using database session store for development");
     sessionSettings.store = storage.sessionStore;
   }
 
@@ -70,18 +74,24 @@ export function setupAuth(app: Express) {
   passport.use(
     new LocalStrategy(async (username, password, done) => {
       try {
+        console.log("Login attempt for user:", username);
+        
         const user = await storage.getUserByUsername(username);
         
         if (!user) {
-          return done(null, false);
+          console.log("User not found:", username);
+          return done(null, false, { message: "Invalid username or password" });
         }
         
+        console.log("User found, verifying password...");
         const passwordMatch = await comparePasswords(password, user.password);
         
         if (passwordMatch) {
+          console.log("Password verified successfully for:", username);
           return done(null, user);
         } else {
-          return done(null, false);
+          console.log("Password verification failed for:", username);
+          return done(null, false, { message: "Invalid username or password" });
         }
       } catch (error) {
         console.error("Authentication error:", error);
@@ -133,19 +143,12 @@ export function setupAuth(app: Express) {
 
   app.post("/api/login", (req, res, next) => {
     passport.authenticate("local", (err, user, info) => {
-      if (err) {
-        return res.status(500).json({ message: "Authentication error" });
-      }
-      
+      if (err) return next(err);
       if (!user) {
         return res.status(401).json({ message: "Invalid username or password" });
       }
-      
       req.login(user, (err) => {
-        if (err) {
-          return res.status(500).json({ message: "Login failed" });
-        }
-        
+        if (err) return next(err);
         const { password, ...userWithoutPassword } = user;
         res.status(200).json(userWithoutPassword);
       });
