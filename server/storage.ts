@@ -68,17 +68,24 @@ export class DatabaseStorage implements IStorage {
   sessionStore: session.Store;
   
 constructor() {
+  // Only create PostgreSQL session store if not in Vercel serverless environment
   if (process.env.VERCEL !== "1") {
     this.sessionStore = new PostgresSessionStore({
       conObject: {
         connectionString: process.env.DATABASE_URL,
         max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 2000,
       },
-      createTableIfMissing: true
+      createTableIfMissing: true,
+      schemaName: 'public'
     });
   } else {
-    // Use memory store for Vercel serverless
-    this.sessionStore = new session.MemoryStore();
+    // Use simple memory store for Vercel to avoid serverless issues
+    const MemoryStore = require('memorystore')(session);
+    this.sessionStore = new MemoryStore({
+      checkPeriod: 86400000 // prune expired entries every 24h
+    });
   }
 }
   
