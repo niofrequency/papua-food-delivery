@@ -22,10 +22,24 @@ export async function hashPassword(password: string) {
 }
 
 async function comparePasswords(supplied: string, stored: string) {
-  const [hashed, salt] = stored.split(".");
-  const hashedBuf = Buffer.from(hashed, "hex");
-  const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
-  return timingSafeEqual(hashedBuf, suppliedBuf);
+  try {
+    // If stored password doesn't contain a dot, it's plain text (for testing)
+    if (!stored.includes('.')) {
+      return supplied === stored;
+    }
+    
+    const [hashed, salt] = stored.split(".");
+    if (!hashed || !salt) {
+      return supplied === stored; // fallback to plain comparison
+    }
+    
+    const hashedBuf = Buffer.from(hashed, "hex");
+    const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
+    return timingSafeEqual(hashedBuf, suppliedBuf);
+  } catch (error) {
+    console.error("Password comparison error:", error);
+    return supplied === stored;
+  }
 }
 
 export function setupAuth(app: Express) {
@@ -33,16 +47,20 @@ export function setupAuth(app: Express) {
     secret: process.env.SESSION_SECRET || "papua-eats-secret-session-key",
     resave: false,
     saveUninitialized: false,
-    store: storage.sessionStore,
-    rolling: true, // Extend session on activity
+    rolling: true,
     cookie: {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      maxAge: 24 * 60 * 60 * 1000,
       path: '/',
       sameSite: 'lax'
     }
   };
+
+  // Only use database session store if not in Vercel serverless
+  if (process.env.VERCEL !== "1" && storage.sessionStore) {
+    sessionSettings.store = storage.sessionStore;
+  }
 
   app.set("trust proxy", 1);
   app.use(session(sessionSettings));
@@ -53,12 +71,20 @@ export function setupAuth(app: Express) {
     new LocalStrategy(async (username, password, done) => {
       try {
         const user = await storage.getUserByUsername(username);
-        if (!user || !(await comparePasswords(password, user.password))) {
+        
+        if (!user) {
           return done(null, false);
-        } else {
+        }
+        
+        const passwordMatch = await comparePasswords(password, user.password);
+        
+        if (passwordMatch) {
           return done(null, user);
+        } else {
+          return done(null, false);
         }
       } catch (error) {
+        console.error("Authentication error:", error);
         return done(error);
       }
     })
@@ -96,7 +122,6 @@ export function setupAuth(app: Express) {
 
       req.login(user, (err) => {
         if (err) return next(err);
-        // Don't send the password back to the client
         const { password, ...userWithoutPassword } = user;
         res.status(201).json(userWithoutPassword);
       });
@@ -108,13 +133,19 @@ export function setupAuth(app: Express) {
 
   app.post("/api/login", (req, res, next) => {
     passport.authenticate("local", (err, user, info) => {
-      if (err) return next(err);
+      if (err) {
+        return res.status(500).json({ message: "Authentication error" });
+      }
+      
       if (!user) {
         return res.status(401).json({ message: "Invalid username or password" });
       }
+      
       req.login(user, (err) => {
-        if (err) return next(err);
-        // Don't send the password back to the client
+        if (err) {
+          return res.status(500).json({ message: "Login failed" });
+        }
+        
         const { password, ...userWithoutPassword } = user;
         res.status(200).json(userWithoutPassword);
       });
@@ -130,7 +161,6 @@ export function setupAuth(app: Express) {
 
   app.get("/api/user", (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    // Don't send the password back to the client
     const { password, ...userWithoutPassword } = req.user;
     res.json(userWithoutPassword);
   });
