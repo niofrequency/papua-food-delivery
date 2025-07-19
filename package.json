@@ -12,6 +12,7 @@
     "db:seed": "tsx db/seed.ts"
   },
   "dependencies": {
+    "memorystore": "^1.6.7",
     "@capacitor/android": "^7.2.0",
     "@capacitor/cli": "^7.2.0",
     "@capacitor/core": "^7.2.0",
