@@ -67,19 +67,20 @@ export interface IStorage {
 export class DatabaseStorage implements IStorage {
   sessionStore: session.Store;
   
-  constructor() {
-    // Use direct database connection config
+constructor() {
+  if (process.env.VERCEL !== "1") {
     this.sessionStore = new PostgresSessionStore({
       conObject: {
         connectionString: process.env.DATABASE_URL,
-        max: 10, // Maximum number of clients in the pool
-        idleTimeoutMillis: 30000, // How long a client is allowed to remain idle before being closed
+        max: 10,
       },
-      tableName: 'session',
-      createTableIfMissing: true,
-      pruneSessionInterval: 60 * 15, // Prune expired sessions every 15 minutes
+      createTableIfMissing: true
     });
+  } else {
+    // Use memory store for Vercel serverless
+    this.sessionStore = new session.MemoryStore();
   }
+}
   
   // User related methods
   async getUser(id: number): Promise<User | undefined> {
